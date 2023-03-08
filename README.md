@@ -1,21 +1,20 @@
-# fastify-jwt
+# @fastify/jwt
 
 ![CI](https://github.com/fastify/fastify-jwt/workflows/CI/badge.svg)
-[![NPM version](https://img.shields.io/npm/v/fastify-jwt.svg?style=flat)](https://www.npmjs.com/package/fastify-jwt)
-[![Known Vulnerabilities](https://snyk.io/test/github/fastify/fastify-jwt/badge.svg)](https://snyk.io/test/github/fastify/fastify-jwt)
+[![NPM version](https://img.shields.io/npm/v/@fastify/jwt.svg?style=flat)](https://www.npmjs.com/package/@fastify/jwt)
 [![js-standard-style](https://img.shields.io/badge/code%20style-standard-brightgreen.svg?style=flat)](https://standardjs.com/)
 
 JWT utils for Fastify, internally it uses [fast-jwt](https://github.com/nearform/fast-jwt).
 
 **NOTE:** The plugin has been migrated from using `jsonwebtoken` to `fast-jwt`. Even though `fast-jwt` has 1:1 feature implementation with `jsonwebtoken`, some _exotic_ implementations might break. In that case please open an issue with details of your implementation. See [Upgrading notes](UPGRADING.md) for more details about what changes this migration introduced.
 
-`fastify-jwt` supports Fastify@3.
-`fastify-jwt` [v1.x](https://github.com/fastify/fastify-jwt/tree/1.x)
+`@fastify/jwt` supports Fastify@3.
+`@fastify/jwt` [v1.x](https://github.com/fastify/fastify-jwt/tree/1.x)
 supports both Fastify@2.
 
 ## Install
 ```
-npm i fastify-jwt --save
+npm i @fastify/jwt
 ```
 
 ## Usage
@@ -23,7 +22,7 @@ Register as a plugin. This will decorate your `fastify` instance with the follow
 
 ```js
 const fastify = require('fastify')()
-fastify.register(require('fastify-jwt'), {
+fastify.register(require('@fastify/jwt'), {
   secret: 'supersecret'
 })
 
@@ -33,7 +32,7 @@ fastify.post('/signup', (req, reply) => {
   reply.send({ token })
 })
 
-fastify.listen(3000, err => {
+fastify.listen({ port: 3000 }, err => {
   if (err) throw err
 })
 ```
@@ -42,7 +41,7 @@ For verifying & accessing the decoded token inside your services, you can use a 
 
 ```js
 const fastify = require('fastify')()
-fastify.register(require('fastify-jwt'), {
+fastify.register(require('@fastify/jwt'), {
   secret: 'supersecret'
 })
 
@@ -71,7 +70,7 @@ However, most of the time we want to protect only some of the routes in our appl
 const fp = require("fastify-plugin")
 
 module.exports = fp(async function(fastify, opts) {
-  fastify.register(require("fastify-jwt"), {
+  fastify.register(require("@fastify/jwt"), {
     secret: "supersecret"
   })
 
@@ -85,14 +84,14 @@ module.exports = fp(async function(fastify, opts) {
 })
 ```
 
-Then use the `preValidation` of a route to protect it & access the user information inside:
+Then use the `onRequest` of a route to protect it & access the user information inside:
 
 ```js
 module.exports = async function(fastify, opts) {
   fastify.get(
     "/",
     {
-      preValidation: [fastify.authenticate]
+      onRequest: [fastify.authenticate]
     },
     async function(request, reply) {
       return request.user
@@ -101,7 +100,7 @@ module.exports = async function(fastify, opts) {
 }
 ```
 
-Make sure that you also check [fastify-auth](https://github.com/fastify/fastify-auth) plugin for composing more complex strategies.
+Make sure that you also check [@fastify/auth](https://github.com/fastify/fastify-auth) plugin for composing more complex strategies.
 
 ### Auth0 tokens verification
 
@@ -123,7 +122,7 @@ Function based `secret` is supported by the `request.jwtVerify()` and `reply.jwt
 const { readFileSync } = require('fs')
 const path = require('path')
 const fastify = require('fastify')()
-const jwt = require('fastify-jwt')
+const jwt = require('@fastify/jwt')
 // secret as a string
 fastify.register(jwt, { secret: 'supersecret' })
 // secret as a function with callback
@@ -167,7 +166,7 @@ fastify.register(jwt, {
   sign: { algorithm: 'ES256' }
 })
 ```
-Optionally you can define global default options that will be used by `fastify-jwt` API if you do not override them.
+Optionally you can define global default options that will be used by `@fastify/jwt` API if you do not override them.
 
 Additionally, it is also possible to reject tokens selectively (i.e. blacklisting) by providing the option `trusted` with the following signature: `(request, decodedToken) => boolean|Promise<boolean>|SignPayloadType|Promise<SignPayloadType>` where `request` is a `FastifyRequest` and `decodedToken` is the parsed (and verified) token information. Its result should be `false` or `Promise<false>` if the token should be rejected or, otherwise, be `true` or `Promise<true>` if the token should be accepted and, considering that `request.user` will be used after that, the return should be `decodedToken` itself.
 
@@ -176,7 +175,7 @@ Additionally, it is also possible to reject tokens selectively (i.e. blacklistin
 const { readFileSync } = require('fs')
 const path = require('path')
 const fastify = require('fastify')()
-const jwt = require('fastify-jwt')
+const jwt = require('@fastify/jwt')
 fastify.register(jwt, {
   secret: {
     private: readFileSync(`${path.join(__dirname, 'certs')}/private.pem`, 'utf8')
@@ -235,7 +234,7 @@ fastify.get('/decode', async (request, reply) => {
    */
 })
 
-fastify.listen(3000, err => {
+fastify.listen({ port: 3000 }, err => {
   if (err) throw err
 })
 ```
@@ -244,9 +243,9 @@ fastify.listen(3000, err => {
 
 #### Example using cookie
 
-In some situations you may want to store a token in a cookie. This allows you to drastically reduce the attack surface of XSS on your web app with the [`httpOnly`](https://wiki.owasp.org/index.php/HttpOnly) and `secure` flags. Cookies can be susceptible to CSRF. You can mitigate this by either setting the [`sameSite`](https://www.owasp.org/index.php/SameSite) flag to `strict`, or by using a CSRF library such as [`fastify-csrf`](https://www.npmjs.com/package/fastify-csrf).
+In some situations you may want to store a token in a cookie. This allows you to drastically reduce the attack surface of XSS on your web app with the [`httpOnly`](https://wiki.owasp.org/index.php/HttpOnly) and `secure` flags. Cookies can be susceptible to CSRF. You can mitigate this by either setting the [`sameSite`](https://www.owasp.org/index.php/SameSite) flag to `strict`, or by using a CSRF library such as [`@fastify/csrf`](https://www.npmjs.com/package/@fastify/csrf).
 
-**Note:** This plugin will look for a decorated request with the `cookies` property. [`fastify-cookie`](https://www.npmjs.com/package/fastify-cookie) supports this feature, and therefore you should use it when using the cookie feature. The plugin will fallback to looking for the token in the authorization header if either of the following happens (even if the cookie option is enabled):
+**Note:** This plugin will look for a decorated request with the `cookies` property. [`@fastify/cookie`](https://www.npmjs.com/package/@fastify/cookie) supports this feature, and therefore you should use it when using the cookie feature. The plugin will fallback to looking for the token in the authorization header if either of the following happens (even if the cookie option is enabled):
 
 - The request has both the authorization and cookie header
 - Cookie is empty, authorization header is present
@@ -255,7 +254,7 @@ If you are signing your cookie, you can set the `signed` boolean to `true` which
 
 ```js
 const fastify = require('fastify')()
-const jwt = require('fastify-jwt')
+const jwt = require('@fastify/jwt')
 
 fastify.register(jwt, {
   secret: 'foobar'
@@ -266,7 +265,7 @@ fastify.register(jwt, {
 })
 
 fastify
-  .register(require('fastify-cookie'))
+  .register(require('@fastify/cookie'))
 
 fastify.get('/cookies', async (request, reply) => {
   const token = await reply.jwtSign({
@@ -292,7 +291,65 @@ fastify.get('/verifycookie', (request, reply) => {
   reply.send({ code: 'OK', message: 'it works!' })
 })
 
-fastify.listen(3000, err => {
+fastify.listen({ port: 3000 }, err => {
+  if (err) throw err
+})
+```
+
+
+### `onlyCookie`
+
+Setting this options to `true` will decode only the cookie in the request. This is useful for refreshToken implementations where the request typically has two tokens: token and refreshToken. The main authentication token usually has a shorter timeout and the refresh token normally stored in the cookie has a longer timeout. This allows you to check to make sure that the cookie token is still valid, as it could have a different expiring time than the main token. The payloads of the two different tokens could also be different.
+
+```js
+const fastify = require('fastify')()
+const jwt = require('@fastify/jwt')
+
+fastify.register(jwt, {
+  secret: 'foobar',
+  cookie: {
+    cookieName: 'refreshToken',
+  },
+  sign: {
+    expiresIn: '10m'
+  }
+})
+
+fastify
+  .register(require('@fastify/cookie'))
+
+fastify.get('/cookies', async (request, reply) => {
+
+  const token = await reply.jwtSign({
+    name: 'foo'
+  })
+
+  const refreshToken = await reply.jwtSign({
+    name: 'bar'
+  }, {expiresIn: '1d'})
+
+  reply
+    .setCookie('refreshToken', refreshToken, {
+      domain: 'your.domain',
+      path: '/',
+      secure: true, // send cookie over HTTPS only
+      httpOnly: true,
+      sameSite: true // alternative CSRF protection
+    })
+    .code(200)
+    .send({token})
+})
+
+fastify.addHook('onRequest', (request) => {
+    request.jwtVerify()
+    request.jwtVerify({onlyCookie: true})
+})
+
+fastify.get('/verifycookie', (request, reply) => {
+  reply.send({ code: 'OK', message: 'it works!' })
+})
+
+fastify.listen({ port: 3000 }, err => {
   if (err) throw err
 })
 ```
@@ -303,7 +360,7 @@ fastify.listen(3000, err => {
 ```js
 const fastify = require('fastify')()
 
-fastify.register(require('fastify-jwt'), {
+fastify.register(require('@fastify/jwt'), {
   secret: 'foobar',
   trusted: validateToken
 })
@@ -314,7 +371,7 @@ fastify.get('/', (request, reply) => {
   reply.send({ code: 'OK', message: 'it works!' })
 })
 
-fastify.listen(3000, (err) => {
+fastify.listen({ port: 3000 }, (err) => {
   if (err) {
     throw err
   }
@@ -335,7 +392,7 @@ You may customize the `request.user` object setting a custom sync function as pa
 
 ```js
 const fastify = require('fastify')();
-fastify.register(require('fastify-jwt'), {
+fastify.register(require('@fastify/jwt'), {
   formatUser: function (user) {
     return {
       departmentName: user.department_name,
@@ -405,9 +462,22 @@ const myCustomMessages = {
   }
 }
 
-fastify.register(require('fastify-jwt'), {
+fastify.register(require('@fastify/jwt'), {
   secret: 'supersecret',
   messages: myCustomMessages
+})
+```
+
+### `decoratorName`
+If this plugin is used together with fastify/passport, we might get an error as both plugins use the same name for a decorator. We can change the name of the decorator, or `user` will default
+
+#### Example
+
+```js
+const fastify = require('fastify')
+fastify.register(require('@fastify/jwt'), {
+  secret: 'supersecret',
+  decoratorName: 'customName'
 })
 ```
 
@@ -479,7 +549,7 @@ For your convenience, the `decode`, `sign`, `verify` and `messages` options you 
 const { readFileSync } = require('fs')
 const path = require('path')
 const fastify = require('fastify')()
-const jwt = require('fastify-jwt')
+const jwt = require('@fastify/jwt')
 fastify.register(jwt, {
   secret: {
     private: readFileSync(`${path.join(__dirname, 'certs')}/private.key`),
@@ -530,7 +600,7 @@ fastify.get('/', (request, reply) => {
    */
 })
 
-fastify.listen(3000, err => {
+fastify.listen({ port: 3000 }, err => {
   if (err) throw err
 })
 ```
@@ -555,7 +625,7 @@ As of 3.2.0, decorated when `options.jwtDecode` is truthy. Will become non-condi
 
 ### Algorithms supported
 
-The following algorithms are currently supported by [fast-jwt](https://github.com/nearform/fast-jwt) that is internally used by `fastify-jwt`.
+The following algorithms are currently supported by [fast-jwt](https://github.com/nearform/fast-jwt) that is internally used by `@fastify/jwt`.
 
 **Name** | **Description**
 ----------------|----------------------------
@@ -585,7 +655,7 @@ You can find the list [here](https://github.com/nearform/fast-jwt#algorithms-sup
 #### Signing and verifying (jwtSign, jwtVerify)
 ```js
 const fastify = require('fastify')()
-const jwt = require('fastify-jwt')
+const jwt = require('@fastify/jwt')
 const request = require('request')
 
 fastify.register(jwt, {
@@ -607,7 +677,7 @@ fastify.get('/verify', function (request, reply) {
   })
 })
 
-fastify.listen(3000, function (err) {
+fastify.listen({ port: 3000 }, function (err) {
   if (err) fastify.log.error(err)
   fastify.log.info(`Server live on port: ${fastify.server.address().port}`)
 
@@ -652,7 +722,7 @@ The following example integrates the [get-jwks](https://github.com/nearform/get-
 ##### Example
 ```js
 const Fastify = require('fastify')
-const fjwt = require('fastify-jwt')
+const fjwt = require('@fastify/jwt')
 const buildGetJwks = require('get-jwks')
 
 const fastify = Fastify()
@@ -674,7 +744,7 @@ fastify.addHook('onRequest', async (request, reply) => {
   }
 })
 
-fastify.listen(3000)
+fastify.listen({ port: 3000 })
 ```
 
 ## TypeScript
@@ -684,30 +754,35 @@ This plugin has two available exports, the default plugin function `fastifyJwt` 
 Import them like so:
 
 ```ts
-import fastifyJwt, { FastifyJWTOptions } from 'fastify-jwt'
+import fastifyJwt, { FastifyJWTOptions } from '@fastify/jwt'
 ```
 
 
-Define custom Payload Type
+Define custom Payload Type and Attached User Type to request object
 > [typescript declaration merging](https://www.typescriptlang.org/docs/handbook/declaration-merging.html)
 
 ```ts
 // fastify-jwt.d.ts
-import "fastify-jwt"
+import "@fastify/jwt"
 
-declare module "fastify-jwt" {
+declare module "@fastify/jwt" {
   interface FastifyJWT {
-    payload: { name: string }
+    payload: { id: number } // payload type is used for signing and verifying
+    user: {
+      id: number,
+      name: string,
+      age: number
+      } // user type is return type of `request.user` object
   }
 }
 
 // index.ts
-fastify.get('/', async (request, replay) => {
+fastify.get('/', async (request, reply) => {
   request.user.name // string
 
-  const token = await replay.jwtSign({
-    name: 123
-    // ^ Type 'number' is not assignable to type 'string'.
+  const token = await reply.jwtSign({
+    id: '123'
+    // ^ Type 'string' is not assignable to type 'number'.
   });
 })
 

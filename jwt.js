@@ -5,10 +5,7 @@ const { createSigner, createDecoder, createVerifier, TokenError } = require('fas
 const assert = require('assert')
 const steed = require('steed')
 const { parse } = require('@lukeed/ms')
-const {
-  BadRequest,
-  Unauthorized
-} = require('http-errors')
+const createError = require('@fastify/error')
 
 const messages = {
   badRequestErrorMessage: 'Format is Authorization: Bearer [token]',
@@ -35,21 +32,25 @@ function convertToMs (time) {
 }
 
 function convertTemporalProps (options, isVerifyOptions) {
-  if (options && typeof options !== 'function') {
-    if (isVerifyOptions && options.maxAge) {
-      options.maxAge = convertToMs(options.maxAge)
-    } else if (options.expiresIn || options.notBefore) {
-      if (options.expiresIn) {
-        options.expiresIn = convertToMs(options.expiresIn)
-      }
+  if (!options || typeof options === 'function') {
+    return options
+  }
 
-      if (options.notBefore) {
-        options.notBefore = convertToMs(options.notBefore)
-      }
+  const formatedOptions = Object.assign({}, options)
+
+  if (isVerifyOptions && formatedOptions.maxAge) {
+    formatedOptions.maxAge = convertToMs(formatedOptions.maxAge)
+  } else if (formatedOptions.expiresIn || formatedOptions.notBefore) {
+    if (formatedOptions.expiresIn) {
+      formatedOptions.expiresIn = convertToMs(formatedOptions.expiresIn)
+    }
+
+    if (formatedOptions.notBefore) {
+      formatedOptions.notBefore = convertToMs(formatedOptions.notBefore)
     }
   }
 
-  return options
+  return formatedOptions
 }
 
 function fastifyJwt (fastify, options, next) {
@@ -61,8 +62,23 @@ function fastifyJwt (fastify, options, next) {
     return next(new Error('options prefix is deprecated'))
   }
 
-  const secret = options.secret
-  const trusted = options.trusted
+  const {
+    cookie,
+    decode: decodeOptions = {},
+    formatUser,
+    jwtDecode,
+    jwtSign,
+    jwtVerify,
+    secret,
+    sign: initialSignOptions = {},
+    trusted,
+    decoratorName = 'user',
+    // TODO: disable on next major
+    // enable errorCacheTTL to prevent breaking change
+    verify: initialVerifyOptions = { errorCacheTTL: 600000 },
+    ...pluginOptions
+  } = options
+
   let secretOrPrivateKey
   let secretOrPublicKey
 
@@ -85,14 +101,21 @@ function fastifyJwt (fastify, options, next) {
     secretCallbackVerify = wrapStaticSecretInCallback(secretCallbackVerify)
   }
 
-  const cookie = options.cookie
-  const formatUser = options.formatUser
+  const signOptions = convertTemporalProps(initialSignOptions)
+  const verifyOptions = convertTemporalProps(initialVerifyOptions, true)
+  const messagesOptions = Object.assign({}, messages, pluginOptions.messages)
+  const namespace = typeof pluginOptions.namespace === 'string' ? pluginOptions.namespace : undefined
 
-  const decodeOptions = options.decode || {}
-  const signOptions = convertTemporalProps(options.sign) || {}
-  const verifyOptions = convertTemporalProps(options.verify, true) || {}
-  const messagesOptions = Object.assign({}, messages, options.messages)
-  const namespace = typeof options.namespace === 'string' ? options.namespace : undefined
+  const NoAuthorizationInCookieError = createError('FST_JWT_NO_AUTHORIZATION_IN_COOKIE', messagesOptions.noAuthorizationInCookieMessage, 401)
+  const AuthorizationTokenExpiredError = createError('FST_JWT_AUTHORIZATION_TOKEN_EXPIRED', messagesOptions.authorizationTokenExpiredMessage, 401)
+  const AuthorizationTokenUntrustedError = createError('FST_JWT_AUTHORIZATION_TOKEN_UNTRUSTED', messagesOptions.authorizationTokenUntrusted, 401)
+  const NoAuthorizationInHeaderError = createError('FST_JWT_NO_AUTHORIZATION_IN_HEADER', messagesOptions.noAuthorizationInHeaderMessage, 401)
+  const AuthorizationTokenInvalidError = createError('FST_JWT_AUTHORIZATION_TOKEN_INVALID', typeof messagesOptions.authorizationTokenInvalid === 'function'
+    ? messagesOptions.authorizationTokenInvalid({ message: '%s' })
+    : messagesOptions.authorizationTokenInvalid
+  , 401)
+  const BadRequestError = createError('FST_JWT_BAD_REQUEST', messagesOptions.badRequestErrorMessage, 400)
+  const BadCookieRequestError = createError('FST_JWT_BAD_COOKIE_REQUEST', messagesOptions.badCookieRequestErrorMessage, 400)
 
   if (
     signOptions &&
@@ -113,18 +136,19 @@ function fastifyJwt (fastify, options, next) {
     return next(new Error('ECDSA Signatures set as Algorithm in the options require a private and public key to be set as the secret'))
   }
 
-  const jwtConfig = {
-    decode: decode,
+  const jwtDecorator = {
+    decode,
     options: {
       decode: decodeOptions,
-      sign: signOptions,
-      verify: verifyOptions,
-      messages: messagesOptions
+      sign: initialSignOptions,
+      verify: initialVerifyOptions,
+      messages: messagesOptions,
+      decoratorName
     },
-    cookie: cookie,
-    sign: sign,
-    verify: verify,
-    lookupToken: lookupToken
+    cookie,
+    sign,
+    verify,
+    lookupToken
   }
 
   let jwtDecodeName = 'jwtDecode'
@@ -132,28 +156,28 @@ function fastifyJwt (fastify, options, next) {
   let jwtSignName = 'jwtSign'
   if (namespace) {
     if (!fastify.jwt) {
-      fastify.decorateRequest('user', null)
+      fastify.decorateRequest(decoratorName, null)
       fastify.decorate('jwt', Object.create(null))
     }
 
     if (fastify.jwt[namespace]) {
       return next(new Error(`JWT namespace already used "${namespace}"`))
     }
-    fastify.jwt[namespace] = jwtConfig
+    fastify.jwt[namespace] = jwtDecorator
 
-    jwtDecodeName = options.jwtDecode ? (typeof options.jwtDecode === 'string' ? options.jwtDecode : 'jwtDecode') : `${namespace}JwtDecode`
-    jwtVerifyName = options.jwtVerify || `${namespace}JwtVerify`
-    jwtSignName = options.jwtSign || `${namespace}JwtSign`
+    jwtDecodeName = jwtDecode ? (typeof jwtDecode === 'string' ? jwtDecode : 'jwtDecode') : `${namespace}JwtDecode`
+    jwtVerifyName = jwtVerify || `${namespace}JwtVerify`
+    jwtSignName = jwtSign || `${namespace}JwtSign`
   } else {
-    fastify.decorateRequest('user', null)
-    fastify.decorate('jwt', jwtConfig)
+    fastify.decorateRequest(decoratorName, null)
+    fastify.decorate('jwt', jwtDecorator)
   }
 
   // Temporary conditional to prevent breaking changes by exposing `jwtDecode`,
   // which already exists in fastify-auth0-verify.
   // If jwtDecode has been requested, or plugin is configured to use a namespace.
   // TODO Remove conditional when fastify-jwt >=4.x.x
-  if (options.jwtDecode || namespace) {
+  if (jwtDecode || namespace) {
     fastify.decorateRequest(jwtDecodeName, requestDecode)
   }
   fastify.decorateRequest(jwtVerifyName, requestVerify)
@@ -170,12 +194,26 @@ function fastifyJwt (fastify, options, next) {
   function decode (token, options) {
     assert(token, 'missing token')
 
+    let selectedDecoder = decoder
+
     if (options && typeof options !== 'function') {
-      const localDecoder = createDecoder(options)
-      return localDecoder(token)
+      selectedDecoder = createDecoder(options)
     }
 
-    return decoder(token)
+    try {
+      return selectedDecoder(token)
+    } catch (error) {
+      // Ignoring the else branch because it's not possible to test it,
+      // it's just a safeguard for future changes in the fast-jwt library
+      /* istanbul ignore next */
+      if (error.code === TokenError.codes.malformed) {
+        throw new AuthorizationTokenInvalidError(error.message)
+      } else if (error.code === TokenError.codes.invalidType) {
+        throw new AuthorizationTokenInvalidError(error.message)
+      } else {
+        throw error
+      }
+    }
   }
 
   function lookupToken (request, options) {
@@ -185,22 +223,23 @@ function fastifyJwt (fastify, options, next) {
 
     let token
     const extractToken = options.extractToken
+    const onlyCookie = options.onlyCookie
     if (extractToken) {
       token = extractToken(request)
       if (!token) {
-        throw new BadRequest(messagesOptions.badRequestErrorMessage)
+        throw new BadRequestError()
       }
-    } else if (request.headers && request.headers.authorization) {
+    } else if ((request.headers && request.headers.authorization) && (!onlyCookie)) {
       const parts = request.headers.authorization.split(' ')
       if (parts.length === 2) {
         const scheme = parts[0]
         token = parts[1]
 
         if (!/^Bearer$/i.test(scheme)) {
-          throw new BadRequest(messagesOptions.badRequestErrorMessage)
+          throw new BadRequestError()
         }
       } else {
-        throw new BadRequest(messagesOptions.badRequestErrorMessage)
+        throw new BadRequestError()
       }
     } else if (cookie) {
       if (request.cookies) {
@@ -209,13 +248,13 @@ function fastifyJwt (fastify, options, next) {
 
           token = cookie.signed ? request.unsignCookie(tokenValue).value : tokenValue
         } else {
-          throw new Unauthorized(messagesOptions.noAuthorizationInCookieMessage)
+          throw new NoAuthorizationInCookieError()
         }
       } else {
-        throw new BadRequest(messagesOptions.badCookieRequestErrorMessage)
+        throw new BadCookieRequestError()
       }
     } else {
-      throw new Unauthorized(messagesOptions.noAuthorizationInHeaderMessage)
+      throw new NoAuthorizationInHeaderError()
     }
 
     return token
@@ -231,20 +270,11 @@ function fastifyJwt (fastify, options, next) {
   }
 
   function checkAndMergeOptions (options, defaultOptions, usePrivateKey, callback) {
-    let mergedOptions
-
     if (typeof options === 'function') {
-      callback = options
-      mergedOptions = mergeOptionsWithKey(defaultOptions, usePrivateKey)
-    } else {
-      if (!options) {
-        mergedOptions = mergeOptionsWithKey(defaultOptions, usePrivateKey)
-      } else {
-        mergedOptions = mergeOptionsWithKey(options, usePrivateKey)
-      }
+      return { options: mergeOptionsWithKey(defaultOptions, usePrivateKey), callback: options }
     }
 
-    return { options: mergedOptions, callback }
+    return { options: mergeOptionsWithKey(options || defaultOptions, usePrivateKey), callback }
   }
 
   function checkAndMergeSignOptions (options, callback) {
@@ -259,8 +289,8 @@ function fastifyJwt (fastify, options, next) {
     assert(payload, 'missing payload')
     let localSigner = signer
 
-    convertTemporalProps(options)
-    const signerConfig = checkAndMergeSignOptions(options, callback)
+    const localOptions = convertTemporalProps(options)
+    const signerConfig = checkAndMergeSignOptions(localOptions, callback)
 
     if (options && typeof options !== 'function') {
       localSigner = createSigner(signerConfig.options)
@@ -280,8 +310,8 @@ function fastifyJwt (fastify, options, next) {
 
     let localVerifier = verifier
 
-    convertTemporalProps(options, true)
-    const veriferConfig = checkAndMergeVerifyOptions(options, callback)
+    const localOptions = convertTemporalProps(options, true)
+    const veriferConfig = checkAndMergeVerifyOptions(localOptions, callback)
 
     if (options && typeof options !== 'function') {
       localVerifier = createVerifier(veriferConfig.options)
@@ -308,18 +338,6 @@ function fastifyJwt (fastify, options, next) {
       useLocalSigner = false
     }
 
-    if (options.sign) {
-      convertTemporalProps(options.sign)
-      // New supported contract, options supports sign and can expand
-      options = {
-        sign: mergeOptionsWithKey({ ...signOptions, ...options.sign }, true)
-      }
-    } else {
-      convertTemporalProps(options)
-      // Original contract, options supports only sign
-      options = mergeOptionsWithKey({ ...signOptions, ...options }, true)
-    }
-
     const reply = this
 
     if (next === undefined) {
@@ -328,6 +346,18 @@ function fastifyJwt (fastify, options, next) {
           err ? reject(err) : resolve(val)
         })
       })
+    }
+
+    if (options.sign) {
+      const localSignOptions = convertTemporalProps(options.sign)
+      // New supported contract, options supports sign and can expand
+      options = {
+        sign: mergeOptionsWithKey(Object.assign(signOptions, localSignOptions), true)
+      }
+    } else {
+      const localOptions = convertTemporalProps(options)
+      // Original contract, options supports only sign
+      options = mergeOptionsWithKey(Object.assign(signOptions, localOptions), true)
     }
 
     if (!payload) {
@@ -392,6 +422,7 @@ function fastifyJwt (fastify, options, next) {
 
   function requestVerify (options, next) {
     let useLocalVerifier = true
+
     if (typeof options === 'function' && !next) {
       next = options
       options = {}
@@ -404,16 +435,16 @@ function fastifyJwt (fastify, options, next) {
     }
 
     if (options.decode || options.verify) {
-      convertTemporalProps(options.verify, true)
+      const localVerifyOptions = convertTemporalProps(options.verify, true)
       // New supported contract, options supports both decode and verify
       options = {
         decode: Object.assign({}, decodeOptions, options.decode),
-        verify: Object.assign({}, verifyOptions, options.verify)
+        verify: Object.assign({}, verifyOptions, localVerifyOptions)
       }
     } else {
-      convertTemporalProps(options, true)
+      const localOptions = convertTemporalProps(options, true)
       // Original contract, options supports only verify
-      options = Object.assign({}, verifyOptions, options)
+      options = Object.assign({}, verifyOptions, localOptions)
     }
 
     const request = this
@@ -455,14 +486,16 @@ function fastifyJwt (fastify, options, next) {
           }
         } catch (error) {
           if (error.code === TokenError.codes.expired) {
-            return callback(new Unauthorized(messagesOptions.authorizationTokenExpiredMessage))
+            return callback(new AuthorizationTokenExpiredError())
           }
 
           if (error.code === TokenError.codes.invalidKey ||
               error.code === TokenError.codes.invalidSignature ||
               error.code === TokenError.codes.invalidClaimValue
           ) {
-            return callback(new Unauthorized(typeof messagesOptions.authorizationTokenInvalid === 'function' ? messagesOptions.authorizationTokenInvalid(error) : messagesOptions.authorizationTokenInvalid))
+            return callback(typeof messagesOptions.authorizationTokenInvalid === 'function'
+              ? new AuthorizationTokenInvalidError(error.message)
+              : new AuthorizationTokenInvalidError())
           }
 
           return callback(error)
@@ -476,11 +509,11 @@ function fastifyJwt (fastify, options, next) {
 
           if (maybePromise && maybePromise.then) {
             maybePromise
-              .then(trusted => trusted ? callback(null, result) : callback(new Unauthorized(messagesOptions.authorizationTokenUntrusted)))
+              .then(trusted => trusted ? callback(null, result) : callback(new AuthorizationTokenUntrustedError()))
           } else if (maybePromise) {
-            callback(null, maybePromise)
+            callback(null, result)
           } else {
-            callback(new Unauthorized(messagesOptions.authorizationTokenUntrusted))
+            callback(new AuthorizationTokenUntrustedError())
           }
         }
       }
@@ -489,7 +522,7 @@ function fastifyJwt (fastify, options, next) {
         next(err)
       } else {
         const user = formatUser ? formatUser(result) : result
-        request.user = user
+        request[decoratorName] = user
         next(null, user)
       }
     })
@@ -497,6 +530,8 @@ function fastifyJwt (fastify, options, next) {
 }
 
 module.exports = fp(fastifyJwt, {
-  fastify: '>=3.0.0',
-  name: 'fastify-jwt'
+  fastify: '4.x',
+  name: '@fastify/jwt'
 })
+module.exports.default = fastifyJwt
+module.exports.fastifyJwt = fastifyJwt

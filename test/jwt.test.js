@@ -4,6 +4,8 @@ const test = require('tap').test
 const Fastify = require('fastify')
 const { createSigner } = require('fast-jwt')
 const jwt = require('../jwt')
+const defaultExport = require('../jwt').default
+const { fastifyJwt: namedExport } = require('../jwt')
 
 const helper = require('./helper')
 
@@ -13,8 +15,27 @@ const { privateKey: privateKeyProtectedECDSA, publicKey: publicKeyProtectedECDSA
 const { privateKey, publicKey } = helper.generateKeyPair()
 const { privateKey: privateKeyECDSA, publicKey: publicKeyECDSA } = helper.generateKeyPairECDSA()
 
+test('export', function (t) {
+  t.plan(3)
+
+  t.test('module export', function (t) {
+    t.plan(1)
+    t.equal(typeof jwt, 'function')
+  })
+
+  t.test('default export', function (t) {
+    t.plan(1)
+    t.equal(typeof defaultExport, 'function')
+  })
+
+  t.test('named export', function (t) {
+    t.plan(1)
+    t.equal(typeof namedExport, 'function')
+  })
+})
+
 test('register', function (t) {
-  t.plan(14)
+  t.plan(20)
 
   t.test('Expose jwt methods', function (t) {
     t.plan(8)
@@ -99,6 +120,36 @@ test('register', function (t) {
     const fastify = Fastify()
     fastify.register(jwt, {
       secret: Buffer.from('some secret', 'base64')
+    }).ready(function (error) {
+      t.equal(error, undefined)
+    })
+  })
+
+  t.test('secret as a function with a callback returning a Buffer', function (t) {
+    t.plan(1)
+    const fastify = Fastify()
+    fastify.register(jwt, {
+      secret: (request, token, callback) => { callback(null, Buffer.from('some secret', 'base64')) }
+    }).ready(function (error) {
+      t.equal(error, undefined)
+    })
+  })
+
+  t.test('secret as a function returning a promise with Buffer', function (t) {
+    t.plan(1)
+    const fastify = Fastify()
+    fastify.register(jwt, {
+      secret: (request, token) => Promise.resolve(Buffer.from('some secret', 'base64'))
+    }).ready(function (error) {
+      t.equal(error, undefined)
+    })
+  })
+
+  t.test('secret as an async function returning a Buffer', function (t) {
+    t.plan(1)
+    const fastify = Fastify()
+    fastify.register(jwt, {
+      secret: async (request, token) => Buffer.from('some secret', 'base64')
     }).ready(function (error) {
       t.equal(error, undefined)
     })
@@ -360,6 +411,24 @@ test('register', function (t) {
   t.test('secret as an async function', t => {
     return runWithSecret(t, async function (request, token) {
       return 'some-secret'
+    })
+  })
+
+  t.test('secret as a function with callback returning a Buffer', t => {
+    return runWithSecret(t, function (request, token, callback) {
+      callback(null, Buffer.from('some-secret', 'base64'))
+    })
+  })
+
+  t.test('secret as a function returning a promise with a Buffer', t => {
+    return runWithSecret(t, function (request, token) {
+      return Promise.resolve(Buffer.from('some secret', 'base64'))
+    })
+  })
+
+  t.test('secret as an async function returning a Buffer', t => {
+    return runWithSecret(t, async function (request, token) {
+      return Buffer.from('some secret', 'base64')
     })
   })
 
@@ -1288,13 +1357,15 @@ test('sign and verify with RSA/ECDSA certificates and global options', function 
 test('sign and verify with trusted token', function (t) {
   t.plan(2)
   t.test('Trusted token verification', function (t) {
-    t.plan(1)
+    t.plan(2)
 
     const f = Fastify()
     f.register(jwt, { secret: 'test', trusted: (request, { jti }) => jti !== 'untrusted' })
     f.get('/', (request, reply) => {
       request.jwtVerify()
         .then(function (decodedToken) {
+          delete decodedToken?.iat
+          t.same(decodedToken, { foo: 'bar', jti: 'trusted' })
           return reply.send(decodedToken)
         })
         .catch(function (error) {
@@ -1316,13 +1387,15 @@ test('sign and verify with trusted token', function (t) {
   })
 
   t.test('Trusted token - async verification', function (t) {
-    t.plan(1)
+    t.plan(2)
 
     const f = Fastify()
     f.register(jwt, { secret: 'test', trusted: (request, { jti }) => Promise.resolve(jti !== 'untrusted') })
     f.get('/', (request, reply) => {
       request.jwtVerify()
         .then(function (decodedToken) {
+          delete decodedToken?.iat
+          t.same(decodedToken, { foo: 'bar', jti: 'trusted' })
           return reply.send(decodedToken)
         })
         .catch(function (error) {
@@ -1424,10 +1497,14 @@ test('decode', function (t) {
 })
 
 test('errors', function (t) {
-  t.plan(11)
+  t.plan(14)
 
   const fastify = Fastify()
-  fastify.register(jwt, { secret: 'test', trusted: (request, { jti }) => jti !== 'untrusted' })
+  fastify.register(jwt, {
+    secret: 'test',
+    trusted: (request, { jti }) => jti !== 'untrusted',
+    decode: { checkTyp: 'JWT' }
+  })
 
   fastify.post('/sign', function (request, reply) {
     reply.jwtSign(request.body.payload, { sign: { iss: 'foo' } })
@@ -1461,6 +1538,16 @@ test('errors', function (t) {
 
   fastify.get('/verifyFailOnAlgorithmMismatch', function (request, reply) {
     request.jwtVerify({ verify: { algorithms: ['invalid'] } })
+      .then(function (decodedToken) {
+        return reply.send(decodedToken)
+      })
+      .catch(function (error) {
+        return reply.send(error)
+      })
+  })
+
+  fastify.get('/verifyFailOnInvalidClockTimestamp', function (request, reply) {
+    request.jwtVerify({ verify: { clockTimestamp: 'not_a_number' } })
       .then(function (decodedToken) {
         return reply.send(decodedToken)
       })
@@ -1534,6 +1621,42 @@ test('errors', function (t) {
           t.equal(error.message, 'Format is Authorization: Bearer [token]')
           t.equal(response.statusCode, 400)
         })
+      })
+
+      t.test('authorization header malformed error', function (t) {
+        t.plan(2)
+
+        fastify
+          .inject({
+            method: 'get',
+            url: '/verify',
+            headers: {
+              authorization: 'Bearer 1.2.3'
+            }
+          })
+          .then(function (response) {
+            const error = JSON.parse(response.payload)
+            t.equal(response.statusCode, 401)
+            t.equal(error.message, 'Authorization token is invalid: The token header is not a valid base64url serialized JSON.')
+          })
+      })
+
+      t.test('authorization header invalid type error', function (t) {
+        t.plan(2)
+
+        fastify
+          .inject({
+            method: 'get',
+            url: '/verify',
+            headers: {
+              authorization: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXUiJ9.e30.ha5mKb-6aDOVHh5lRaUBNdDmMAYLOl1no3LQkV2mAMQ'
+            }
+          })
+          .then(function (response) {
+            const error = JSON.parse(response.payload)
+            t.equal(response.statusCode, 401)
+            t.equal(error.message, 'Authorization token is invalid: The type must be "JWT".')
+          })
       })
 
       t.test('Bearer authorization format error', function (t) {
@@ -1688,7 +1811,34 @@ test('errors', function (t) {
             }
           }).then(function (verifyResponse) {
             const error = JSON.parse(verifyResponse.payload)
-            t.equal(error.message, 'The token algorithm is invalid.')
+            t.equal(error.message, 'Authorization token is invalid: Invalid public key provided for algorithms invalid.')
+            t.equal(verifyResponse.statusCode, 401)
+          })
+        })
+      })
+
+      t.test('requestVerify function: invalid timestamp', function (t) {
+        t.plan(3)
+
+        fastify.inject({
+          method: 'post',
+          url: '/sign',
+          payload: {
+            payload: { foo: 'bar' }
+          }
+        }).then(function (signResponse) {
+          const token = JSON.parse(signResponse.payload).token
+          t.ok(token)
+
+          fastify.inject({
+            method: 'get',
+            url: '/verifyFailOnInvalidClockTimestamp',
+            headers: {
+              authorization: `Bearer ${token}`
+            }
+          }).then(function (verifyResponse) {
+            const error = JSON.parse(verifyResponse.payload)
+            t.equal(error.message, 'The clockTimestamp option must be a positive number.')
             t.equal(verifyResponse.statusCode, 500)
           })
         })
@@ -1722,7 +1872,7 @@ test('errors', function (t) {
     })
 })
 
-test('token in a signed cookie, with fastify-cookie parsing', function (t) {
+test('token in a signed cookie, with @fastify/cookie parsing', function (t) {
   t.plan(2)
 
   const fastify = Fastify()
@@ -1730,7 +1880,7 @@ test('token in a signed cookie, with fastify-cookie parsing', function (t) {
     secret: 'test',
     cookie: { cookieName: 'jwt', signed: true }
   })
-  fastify.register(require('fastify-cookie'), {
+  fastify.register(require('@fastify/cookie'), {
     secret: 'cookieSecret'
   })
 
@@ -1771,12 +1921,120 @@ test('token in a signed cookie, with fastify-cookie parsing', function (t) {
   })
 })
 
-test('token in cookie, with fastify-cookie parsing', function (t) {
+test('token in cookie only, when onlyCookie is passed to verifyJWT()', function (t) {
+  t.plan(4)
+
+  const fastify = Fastify()
+  fastify.register(jwt, { secret: 'test', cookie: { cookieName: 'jwt' } })
+  fastify.register(require('@fastify/cookie'))
+
+  fastify.post('/sign', function (request, reply) {
+    return reply.jwtSign(request.body)
+      .then(function (token) {
+        return { token }
+      })
+  })
+
+  fastify.get('/verify', function (request, reply) {
+    return request.jwtVerify({ onlyCookie: true })
+      .then(function (decodedToken) {
+        return reply.send(decodedToken)
+      })
+  })
+
+  t.test('token present in cookie', function (t) {
+    t.plan(2)
+    fastify.inject({
+      method: 'post',
+      url: '/sign',
+      payload: { foo: 'bar' }
+    }).then(function (signResponse) {
+      const token = JSON.parse(signResponse.payload).token
+      t.ok(token)
+
+      return fastify.inject({
+        method: 'get',
+        url: '/verify',
+        cookies: {
+          jwt: token
+        }
+      }).then(function (verifyResponse) {
+        const decodedToken = JSON.parse(verifyResponse.payload)
+        t.equal(decodedToken.foo, 'bar')
+      })
+    })
+  })
+
+  t.test('token absent in cookie', function (t) {
+    t.plan(2)
+    fastify.inject({
+      method: 'get',
+      url: '/verify',
+      cookies: {}
+    }).then(function (verifyResponse) {
+      const error = JSON.parse(verifyResponse.payload)
+      t.equal(error.message, 'No Authorization was found in request.cookies')
+      t.equal(error.statusCode, 401)
+    })
+  })
+
+  // should reject
+  t.test('authorization headers present but no cookie header. should reject as we only check for cookie header', function (t) {
+    t.plan(3)
+    fastify.inject({
+      method: 'post',
+      url: '/sign',
+      payload: { foo: 'bar' }
+    }).then(function (signResponse) {
+      const token = JSON.parse(signResponse.payload).token
+      t.ok(token)
+
+      return fastify.inject({
+        method: 'get',
+        url: '/verify',
+        headers: {
+          authorization: token
+        }
+      }).then(function (verifyResponse) {
+        const error = JSON.parse(verifyResponse.payload)
+        t.equal(error.message, 'No Authorization was found in request.cookies')
+        t.equal(error.statusCode, 401)
+      })
+    })
+  })
+
+  // check here 1
+  t.test('malformed cookie header, should reject', function (t) {
+    t.plan(3)
+    fastify.inject({
+      method: 'post',
+      url: '/sign',
+      payload: { foo: 'bar' }
+    }).then(function (signResponse) {
+      const token = JSON.parse(signResponse.payload).token
+      t.ok(token)
+
+      return fastify.inject({
+        method: 'get',
+        url: '/verify',
+        cookies: {
+          jwt: token + 'randomValue'
+        }
+      }).then(function (verifyResponse) {
+        const error = JSON.parse(verifyResponse.payload)
+        t.equal(error.message, 'Authorization token is invalid: The token signature is invalid.')
+        t.equal(error.statusCode, 401)
+      })
+    })
+  })
+})
+
+test('token in cookie, with @fastify/cookie parsing', function (t) {
   t.plan(6)
 
   const fastify = Fastify()
   fastify.register(jwt, { secret: 'test', cookie: { cookieName: 'jwt' } })
-  fastify.register(require('fastify-cookie'))
+  fastify.register(require('@fastify/cookie'))
 
   fastify.post('/sign', function (request, reply) {
     return reply.jwtSign(request.body)
@@ -1935,7 +2193,7 @@ test('token in cookie, with fastify-cookie parsing', function (t) {
   })
 })
 
-test('token in cookie, without fastify-cookie parsing', function (t) {
+test('token in cookie, without @fastify/cookie parsing', function (t) {
   t.plan(2)
 
   const fastify = Fastify()
@@ -2003,6 +2261,63 @@ test('token in cookie, without fastify-cookie parsing', function (t) {
         t.equal(decodedToken.foo, 'bar')
       })
     })
+  })
+})
+
+test('token and refreshToken in a signed cookie, with @fastify/cookie parsing, decoded with different payloads ', function (t) {
+  t.plan(3)
+
+  const fastify = Fastify()
+  fastify.register(jwt, {
+    secret: 'test',
+    cookie: { cookieName: 'refreshToken', signed: true }
+  })
+
+  fastify.register(require('@fastify/cookie'), {
+    secret: 'cookieSecret'
+  })
+
+  fastify.post('/sign', async function (request, reply) {
+    const { token, refreshToken } = request.body
+    const tokenSigned = await reply.jwtSign(token, { expiresIn: '10m' })
+    const refreshTokenSigned = await reply.jwtSign(refreshToken, { expiresIn: '1d' })
+    return reply.setCookie('refreshToken', refreshTokenSigned, { signed: true }).send({ tokenSigned })
+  })
+
+  fastify.get('/verify', async function (request, reply) {
+    const token = await request.jwtVerify()
+    const refreshToken = await request.jwtVerify({ onlyCookie: true })
+    return reply.send({ token, refreshToken })
+  })
+
+  fastify.inject({
+    method: 'post',
+    url: '/sign',
+    payload: { token: { foo: 'bar' }, refreshToken: { bar: 'foo' } }
+  }).then(async function (signResponse) {
+    const cookieName = signResponse.cookies[0].name
+    const signedCookie = signResponse.cookies[0].value
+
+    const payLoad = JSON.parse(signResponse.payload)
+    const signedTokenHeader = payLoad.tokenSigned
+
+    t.equal(cookieName, 'refreshToken')
+
+    const response = await fastify.inject({
+      method: 'get',
+      url: '/verify',
+      cookies: {
+        refreshToken: signedCookie
+      },
+      headers: {
+        Authorization: 'Bearer ' + signedTokenHeader
+      }
+    })
+
+    const decodedToken = JSON.parse(response.payload)
+
+    t.equal(decodedToken.token.foo, 'bar')
+    t.equal(decodedToken.refreshToken.bar, 'foo')
   })
 })
 
@@ -2471,7 +2786,8 @@ test('support fast-jwt compatible config options', async function (t) {
 })
 
 test('supporting time definitions for "maxAge", "expiresIn" and "notBefore"', async function (t) {
-  t.plan(3)
+  t.plan(4)
+
   const options = {
     sign: {
       key: 'secret',
@@ -2486,6 +2802,8 @@ test('supporting time definitions for "maxAge", "expiresIn" and "notBefore"', as
     },
     jwtDecode: true
   }
+
+  const oneDayInSeconds = 24 * 60 * 60
 
   const fastify = Fastify()
   fastify.register(jwt, { secret: 'test', ...options })
@@ -2507,8 +2825,15 @@ test('supporting time definitions for "maxAge", "expiresIn" and "notBefore"', as
 
   await fastify.ready()
 
+  t.test('initial options should not be modified', function (t) {
+    t.plan(2)
+
+    t.equal(fastify.jwt.options.sign.expiresIn, '1d')
+    t.equal(fastify.jwt.options.verify.maxAge, 2000)
+  })
+
   t.test('options are functions', function (t) {
-    t.plan(6)
+    t.plan(7)
     fastify.jwt.sign({ foo: 'bar' }, (err, token) => {
       t.error(err)
       t.ok(token)
@@ -2518,6 +2843,7 @@ test('supporting time definitions for "maxAge", "expiresIn" and "notBefore"', as
         t.ok(result)
         t.ok(result.exp)
         t.equal(typeof result.exp, 'number')
+        t.equal(result.exp - result.iat, oneDayInSeconds)
       })
     })
   })
@@ -2531,6 +2857,14 @@ test('supporting time definitions for "maxAge", "expiresIn" and "notBefore"', as
 
     const token = JSON.parse(signResponse.payload).token
     t.ok(token)
+    fastify.jwt.verify(token, { secret: 'test' }, (err, result) => {
+      t.error(err)
+      t.ok(result)
+      t.ok(result.exp)
+      t.equal(typeof result.exp, 'number')
+      t.equal(result.iss, 'foo')
+      t.equal(result.exp - result.iat, oneDayInSeconds)
+    })
   })
 
   t.test('general options defined and merged with signOptions', async function (t) {
@@ -2555,7 +2889,75 @@ test('supporting time definitions for "maxAge", "expiresIn" and "notBefore"', as
     t.ok(decodedToken)
     t.ok(decodedToken.payload.exp)
     t.equal(typeof decodedToken.payload.exp, 'number')
+    t.equal(decodedToken.payload.exp - decodedToken.payload.iat, oneDayInSeconds)
     t.ok(decodedToken.payload.nbf)
     t.equal(typeof decodedToken.payload.nbf, 'number')
   })
+})
+
+test('global user options should not be modified', async function (t) {
+  t.plan(3)
+
+  const options = {
+    sign: {
+      key: 'secret',
+      expiresIn: '1d',
+      notBefore: '4 hours'
+    },
+    verify: {
+      key: 'secret',
+      maxAge: 2000
+    },
+    decode: {
+      complete: true
+    },
+    jwtDecode: true
+  }
+
+  const fastify = Fastify()
+  fastify.register(jwt, { secret: 'test', ...options })
+
+  await fastify.ready()
+
+  t.equal(fastify.jwt.options.sign.expiresIn, '1d')
+  t.equal(fastify.jwt.options.sign.notBefore, '4 hours')
+  t.equal(fastify.jwt.options.verify.maxAge, 2000)
+})
+
+test('decorator name should work after being changed in the options', async function (t) {
+  t.plan(5)
+
+  const fastify = Fastify()
+  const decoratorName = 'customName'
+  fastify.register(jwt, { secret: 'test', decoratorName })
+
+  fastify.post('/sign', async function (request, reply) {
+    const token = await reply.jwtSign(request.body)
+    return { token }
+  })
+  fastify.get('/check-user', async function (request, reply) {
+    await request.jwtVerify()
+    return reply.send(request[decoratorName])
+  })
+
+  const signResponse = await fastify.inject({
+    method: 'post',
+    url: '/sign',
+    payload: { foo: 'bar' }
+  })
+  const token = JSON.parse(signResponse.payload).token
+  t.ok(token)
+  t.ok(fastify.jwt.options.decoratorName)
+  t.equal(fastify.jwt.options.decoratorName, decoratorName)
+
+  const response = await fastify.inject({
+    method: 'get',
+    url: '/check-user',
+    headers: {
+      authorization: `Bearer ${token}`
+    }
+  })
+  const user = JSON.parse(response.payload)
+  t.equal(user.baz, undefined)
+  t.equal(user.foo, 'bar')
 })

@@ -13,6 +13,9 @@ const secretOptions = {
   secretFnCallback: (_req, _token, cb) => { cb(null, 'supersecret') },
   secretFnPromise: (_req, _token) => Promise.resolve('supersecret'),
   secretFnAsync: async (_req, _token) => 'supersecret',
+  secretFnBufferCallback: (_req, _token, cb) => { cb(null, Buffer.from('some secret', 'base64')) },
+  secretFnBufferPromise: (_req, _token) => Promise.resolve(Buffer.from('some secret', 'base64')),
+  secretFnBufferAsync: async (_req, _token) => Buffer.from('some secret', 'base64'),
   publicPrivateKeyFn: {
     public: (_req, _rep, cb) => { cb(null, 'publicKey') },
     private: 'privateKey'
@@ -34,7 +37,8 @@ const jwtOptions: FastifyJWTOptions = {
   },
   verify: {
     maxAge: '1 hour',
-    extractToken: (request) => 'token'
+    extractToken: (request) => 'token',
+    onlyCookie: false
   },
   decode: {
     complete: true
@@ -71,11 +75,25 @@ Object.values(secretOptions).forEach((value) => {
 
 app.register(fastifyJwt, {...jwtOptions, trusted: () => Promise.resolve(false || '' || Buffer.from('foo')) })
 
+app.register(fastifyJwt, {
+  secret: {
+    private: {
+      key: 'privateKey',
+      passphrase: 'super secret passphrase',
+    },
+    public: 'publicKey',
+  },
+  sign: { algorithm: 'ES256' },
+})
+
+app.register(fastifyJwt, {...jwtOptions, decoratorName: 'token' })
+
 // expect jwt and its subsequent methods have merged with the fastify instance
 expectAssignable<object>(app.jwt)
 expectAssignable<Function>(app.jwt.sign)
 expectAssignable<Function>(app.jwt.verify)
 expectAssignable<Function>(app.jwt.decode)
+expectAssignable<Function>(app.jwt.lookupToken)
 expectAssignable<FastifyJWTOptions['cookie']>(app.jwt.cookie)
 
 app.addHook("preHandler", async (request, reply) => {
